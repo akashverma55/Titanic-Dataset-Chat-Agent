@@ -139,6 +139,7 @@ celerybeat.pid
 .envrc
 .venv
 env/
+.streamlit/
 venv/
 ENV/
 env.bak/
@@ -206,5 +207,3 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-
-.streamlit/secrets.toml
