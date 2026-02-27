@@ -1,0 +1,100 @@
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.core import CORSMiddleware
+from pathlib import Path
+from fastapi.staticfiles import StaticFiles
+import pandas as pd
+import os
+from langchain_experimental_agents import create_pandas_dataframe_agent
+from langchain.agents.agent_types import AgentType
+from pydantic import BaseModel
+from typing import Optional
+import base64
+
+load_dotenv()
+api_key = os.getenv("GEMINI_API_KEY")
+app = FastAPI(title='Titanic Chat Agent', version = "1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins = ["*"],
+    allow_methods = ["*"],
+    allow_headers = ["*"]
+)
+
+STATIC_PATH  = Path("static")
+STATIC_PATH.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_PATH)), name="static")
+
+df = pd.read_csv("titanic_cleaned.csv")
+
+llm = ChatGoogleGenerativeAI(model = "gemini-2.5-flash", temperature = 0, api_key = api_key)
+
+agent_prefix = """
+You are a helpful data analyst assistant specializing in the Titanic passenger dataset.
+You have access to a pandas DataFrame called `df` with these key columns:
+- PassengerId, Survived (0/1), Pclass (1/2/3), Name, Sex, Age, SibSp, Parch
+- Ticket, Fare, Cabin, Embarked (C/Q/S)
+- PassengerClass (First/Second/Third), Survived_Label, Sex_Label, EmbarkedPort
+
+IMPORTANT RULES:
+1. Only answer questions related to the Titanic dataset.
+2. If asked for a visualization (histogram, bar chart, pie chart, etc.), generate it using matplotlib/plotly AND save it.
+3. For plots: use plt.savefig('/tmp/chart.png', dpi=120, bbox_inches='tight') then include the exact text CHART_SAVED in your response.
+4. Always provide a clear, concise text answer alongside any chart.
+5. If the question is unrelated to the Titanic, politely redirect the user.
+6. Format numbers nicely (e.g., percentages to 1 decimal place).
+7. Whenever the user uses keywords like 'plot', 'chart', 'graph', or 'visualize', prioritize generating a visual over a text-only summary
+""" 
+
+agent = create_pandas_dataframe_agent(
+    llm = llm,
+    df = df,
+    agent_type= AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+    prefix= agent_prefix,
+    verbose = True,
+    allow_dangerous_code = True,
+    handle_parsing_errors = True,
+    max_iterations = 10
+)
+
+class ChatRequest(BaseModel):
+    question: str 
+
+class ChatResponse(BaseModel):
+    answer: str
+    # chart_data: Optional[dict] = None
+    chart_image_b64: Optional[dict] = None
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Titanic Chat Agent is running"}
+
+@app.post("/chat", response_model = ChatResponse)
+def chat(request: ChatRequest):
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    
+    try: 
+        agent_response = agent.invoke({"input":question})
+        answer = agent_response.get("output", str(agent_response))
+    except Exception as e:
+        answer = f"I encountered an issue processing that query. Please try rephrasing. (Error: {str(e)[:100]})"
+
+    chart_image_b64 = None
+    if "CHART_SAVED" in answer or Path("/tmp/chart.png").exists():
+        try: 
+            with open("/tmp/chart.png", "rb") as f:
+                chart_image_b64 = base64.b64encode(f.read()).decode()
+            Path("/tmp/chart.png").unlink(missing_ok=True)
+            answer = answer.replace("CHART_SAVED", "").strip()
+        except Exception:
+            pass
+    
+    return ChatResponse(
+        answer = answer,
+        chart_image_b64 = chart_image_b64
+    )
+
+
