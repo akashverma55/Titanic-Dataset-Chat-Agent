@@ -23,9 +23,15 @@ CHART_PATH_STR = str(CHART_PATH).replace("\\", "/")
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 app = FastAPI(title='Titanic Chat Agent', version = "1.0.0")
+
+origins = [
+    "http://localhost:8501",           
+    "https://your-app-name.streamlit.app" 
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins = ["*"],
+    allow_origins = origins,
+    allow_credentials = True,
     allow_methods = ["*"],
     allow_headers = ["*"]
 )
@@ -53,6 +59,8 @@ IMPORTANT RULES:
 5. If the question is unrelated to the Titanic, politely redirect the user.
 6. Format numbers nicely (e.g., percentages to 1 decimal place).
 7. Whenever the user uses keywords like 'plot', 'chart', 'graph', or 'visualize', prioritize generating a visual over a text-only summary
+8. ALWAYS end your final response with exactly: Final Answer: <your text here>
+    Never use markdown bullets in the Final Answer line. This is required.  
 """ 
 
 agent = create_pandas_dataframe_agent(
@@ -84,12 +92,30 @@ def chat(request: ChatRequest):
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
     
-    try: 
-        agent_response = agent.invoke({"input":question})
-        answer = agent_response.get("output", str(agent_response))
-        answer = answer.replace("CHART_SAVED", "").strip()
+    answer = ""
+
+    try:
+        agent_response = agent.invoke({"input": question})
+        print(f"[DEBUG] agent_response = {agent_response}")
+
+        if agent_response is None:
+            answer = "Agent returned no response. Chart may still be available."
+        elif isinstance(agent_response, dict):
+            answer = agent_response.get("output", str(agent_response))
+        else:
+            answer = str(agent_response)
+
     except Exception as e:
-        answer = f"I encountered an issue processing that query. Please try rephrasing. (Error: {str(e)[:100]})"
+        print(f"[AGENT ERROR] {type(e).__name__}: {e}")
+        error_str = str(e)
+
+        if "Could not parse LLM output:" in error_str:
+            extracted = error_str.split("Could not parse LLM output:")[-1].strip()
+            extracted = extracted.strip("`").strip()
+            answer = extracted
+            print(f"[RECOVERED] Answer extracted from parse error: {answer[:200]}")
+        else:
+            answer = "I had trouble reading the response. Chart may still be available below."
 
     chart_image_b64 = None
     if CHART_PATH.exists():
