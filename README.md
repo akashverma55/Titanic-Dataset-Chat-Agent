@@ -70,7 +70,7 @@ A complete end-to-end conversational AI agent for exploring the Titanic passenge
 ```
 titanic-agent/
 ├── main.py                  # FastAPI backend + LangChain agent
-├── frontend.py              # Streamlit chat UI
+├── app.py              # Streamlit chat UI
 ├── titanic_cleaned.csv      # Cleaned Titanic dataset
 ├── requirements.txt         # Python dependencies
 ├── .env                     # API keys (never commit this)
